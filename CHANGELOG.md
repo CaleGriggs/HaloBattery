@@ -94,20 +94,17 @@ switched-off WLmouse receiver.
   one icon, and a reading that reports charging wins the merge. The four ids are
   HeadsetControl's, run on its author's hardware; **unverified in the app** until an
   XT/SE owner runs a build.
-- Steam Controller (2025) over its puck (#58): the battery is read from the controller's
-  own input reports - the charge state and level in report 0x43, a connect and disconnect
-  in reports 0x79 / 0x46 - listen-only, nothing is sent to the controller, so its lizard
-  mode and rumble stay as the user's games set them. On review (@ahmedkhursheed23) the
-  greyed value no longer expires on a timer while the puck is there (a removed icon comes
-  back at a new tray position, #87), the collection under each slot interface is picked
-  by usage with a logged fallback when 0xFF00:0001 is not present, and the diagnostics
-  list the puck's collections when nothing matches. The puck sends its battery report
-  about every 2.5 s while the controller is awake (~0.4 Hz, measured by
-  [CouchTurtle/sc2-research](https://github.com/CouchTurtle/sc2-research) and
-  [eva-val/steambattery](https://github.com/eva-val/steambattery)); the first tester
-  run in #58 showed the original 0.4 s listen window missing it, so a slot with a
-  live controller is listened to for up to 5 s per poll - twice the cadence - with a
-  disconnect ending the read early. Unit tests. Confirmed on hardware (@Kosminaut13, #58): 95 % while awake and 100 % charging in the app, and an asleep slot keeping its last value greyed.
+- Steam Controller(2026) Support: Already works over bluetooth, now detects USB and 2.4
+  GHz dongle. Reads hid for dongle VID and PID (`0x28DE`:`0x0001`). Each dongle or
+  controller shows a corresponding unique serial number (each dongle has four possible
+  connection slots). Creates a thread for each serial number (each dongle or USB
+  connection), reads paths for valid usage_page and usage numbers (`0xFF00`:`0x0001`).
+  If the path can be read, the thread will then continuously read the paths associated
+  with it until a report ID of `0x43` appears or a timeout occurs. The report is then saved
+  and ready for the main app to read. The thread reads each of it's 4 slots this way then
+  sleeps for 10 seconds. If the report was blank before, the new report gets treated as
+  a new device connetion, if the report was populated but is now blank, it gets treated
+  as a disconnect. When a new connection/disconnection occurs, the app is asked to refresh.
 - Razer BlackShark V2 Pro (2020, receiver 1532:0528): device-reported battery level
   and charging state through its 64-byte feature report 0xFF. Reads the receiver's
   vendor collection without probing the generic mouse or 2023 PA protocols.

@@ -343,17 +343,17 @@ Read straight from the HID input report (USB byte 53, Bluetooth full report byte
 
 Read straight from the HID input report: exact percentage and charging state (USB byte 30, Bluetooth full report byte 32). Over Bluetooth, see the note below the table
 
-### Steam Controller (2025) with its puck
-
-**Connection:** 2.4 GHz puck (28DE:1304 Proteus, 28DE:1305 Nereid)
-
-Listened to, never written: the puck relays each controller on its own vendor collection (usage page 0xFF00 / usage 0x0001) on interfaces 2 to 5, one interface per controller slot, as SDL's driver reads it (src/joystick/hidapi/SDL_hidapi_steam_triton.c). Input report 0x43 carries the charge state in byte 0 (1 discharging, 2 charging, 4 charging done) and the level in % in byte 1; reports 0x79 and 0x46 report a controller connecting or disconnecting, and 0x42, 0x45 and 0x47 are the controller's state reports. The puck sends 0x43 about every 2.5 s while the controller is awake - ~0.4 Hz, measured over ~9k frames by [CouchTurtle/sc2-research](https://github.com/CouchTurtle/sc2-research) and on live hardware by [eva-val/steambattery](https://github.com/eva-val/steambattery), and #58's first tester run is what showed the original 0.4 s listen window missing it. A slot with a live controller is therefore listened to for up to 5 s per poll (twice the cadence) and stops early on a disconnect; a quiet slot costs only the short window. The last level is kept between reports the way SDL keeps it; a slot that goes quiet keeps its last value greyed, and a disconnect removes the icon at once. SDL sends rumble, IMU and a lizard mode command over the same report and disables lizard mode every 3 seconds - none of that is sent here, so the controller keeps behaving the way the user's games expect. The older 2015 Steam Controller and its dongle speak a different protocol and are not covered. **Confirmed on hardware** (@Kosminaut13, #58): his run caught the 0x43 report inside the 5 s window - `43 01 5f` at 95 % while awake and `43 04 64` at 100 % charging on the cable, with the tray following both states and an asleep slot keeping its last value greyed. A level above 100 is refused rather than shown
-
 ### Xbox-compatible controllers (other models)
 
 **Connection:** USB or the Xbox wireless adapter
 
 Any Xbox-compatible controller is read the same way as the GameSir G7 Pro: the battery level from `Windows.Gaming.Input.RawGameControllers`, with XInput's coarse level (low / medium / full) as the fallback. Controllers other than the GameSir have not been individually tested.
+
+### Valve Steam Controller(2026) (via dongle and USB)
+
+**Connection** 2.4 Ghz dongle
+
+Reads HID for dongle VID and PID (`0x28DE`:`0x0001`). Each dongle or controller shows a corresponding unique serial number (each dongle has four possible connection slots). Creates a thread for each serial number (each dongle or USB connection), reads paths for valid usage_page and usage numbers (`0xFF00`:`0x0001`). If the path can be read, the thread will then continuously read the paths associated with it until a report ID of `0x43` appears or a timeout occurs. The report is then saved and ready for the main app to read. The thread reads each of it's 4 slots this way then sleeps for 10 seconds. If the report was blank before, the new report gets treated as a new device connetion, if the report was populated but is now blank, it gets treated as a disconnect. When a new connection/disconnection occurs, the app is asked to refresh.
 
 ## Bluetooth
 

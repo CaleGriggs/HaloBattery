@@ -140,8 +140,9 @@ from providers import (AmInfinityProvider, AstroProvider, AsusProvider,  # noqa:
                        KeychronProvider, LamzuProvider, LofreeProvider, LogitechProvider,
                        LogitechCenturionProvider,
                        MchoseProvider, NintendoProvider, NzxtProvider, PlayStationProvider, PulsarProvider,
-                       RazerProvider, SteelSeriesEliteProvider, SteelSeriesProvider,
-                       WLmouseProvider, XInputProvider, SteamProvider)
+                       RazerProvider, SteelSeriesEliteProvider, SteelSeriesProvider, ValveSteamControllerProvider,
+                       WLmouseProvider, XInputProvider, 
+                       WLmouseProvider, XInputProvider)
 from providers.bluetooth import BluetoothWatcher  # noqa: E402
 from providers.jbl import PROBE_LISTEN_S as JBL_PROBE_LISTEN_S  # noqa: E402
 
@@ -203,15 +204,15 @@ PROVIDER_LABELS = {
     "playstation": "PlayStation controllers",
     "pulsar": "Pulsar / ATK VXE mice",
     "razer": "Razer mice and headsets",
-    "steam": "Steam Controller (2025)",
     "steelseries": "SteelSeries",
     "steelseries_elite": "SteelSeries Arctis Nova Elite",
+    "valve software" : "Steam Controller",
     "wlmouse": "WLmouse",
     "xinput": "Xbox-compatible controllers",
 }
 
 
-def make_providers(jbl_listen_first: float = 0.0) -> list:
+def make_providers(jbl_listen_first: float = 0.0, on_requested_update = None) -> list:
     # jbl_listen_first: only --probe passes it, so its single poll waits for a JBL level
     return [RazerProvider(), AudezeProvider(), WLmouseProvider(), MchoseProvider(),
             HyperXAlpha2Provider(), HyperXCloud3Provider(), HyperXProvider(),
@@ -219,9 +220,8 @@ def make_providers(jbl_listen_first: float = 0.0) -> list:
             JblProvider(listen_first=jbl_listen_first), LogitechProvider(), SteelSeriesProvider(), XInputProvider(),
             PlayStationProvider(), EightBitDoProvider(), BarracudaProvider(), NintendoProvider(),
             AsusProvider(), GWolvesProvider(), LofreeProvider(), AstroProvider(), CorsairProvider(),
-            LamzuProvider(), AmInfinityProvider(),
-            SteelSeriesEliteProvider(), LogitechCenturionProvider(), HyperXCloud3SProvider(), NzxtProvider(),
-            SteamProvider()]
+            LamzuProvider(), AmInfinityProvider(), SteelSeriesEliteProvider(), LogitechCenturionProvider(),
+            HyperXCloud3SProvider(), ValveSteamControllerProvider(on_requested_update)]
 
 
 # ---------------------------------------------------------------- config
@@ -1031,6 +1031,9 @@ class WakeEvent(threading.Event):
     def bluetooth(self):
         super().set()
 
+    def steamPuck(self):
+        super().set()
+
     def clear(self):
         self.take()
 
@@ -1050,7 +1053,8 @@ class App:
         self.theme_evt = threading.Event()   # "re-check the icon colour now"
         self.win_events: Optional[winevents.WindowEventWatcher] = None
         self.light_taskbar = self.compute_light()
-        self.providers = make_providers()
+        self.wake = WakeEvent()
+        self.providers = make_providers(on_requested_update= self.wake)
         self.key_provider: Dict[str, str] = {}   # device key -> provider name
         self.history = history.History(HISTORY_PATH)
         self.history.load()
@@ -1062,7 +1066,6 @@ class App:
         self.placeholder: Optional[pystray.Icon] = None
         self.lock = threading.RLock()
         self._bt_dup_logged: Set[str] = set()   # Bluetooth copies already reported
-        self.wake = WakeEvent()
         self.stop_evt = threading.Event()
         self.diag_requested = threading.Event()
         self.alerted: Dict[str, bool] = {}
