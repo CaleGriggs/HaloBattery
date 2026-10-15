@@ -63,9 +63,66 @@ READ_TIMEOUT = 100
 
 POLLTIME = 5
 
+NOTIFICATIONS = True
+CHARGED_PING = True
+LOW_BATTERY_PING = True
+
+import struct
+
+def tone(device:hid, frequency=900, duration=50):
+    '''Frequency:
+    300 to 600 sounds good; NOT 660 to 690 demonic harmonics; above 1400 sounds like it's painful;
+    '''
+    report = struct.pack(
+        "<BBbHHHB",
+        0x83,       # Report ID
+        0,          # Actuator/side
+        10,         # Gain in dB
+        frequency,  # Frequency in Hz
+        duration,   # Duration in milliseconds
+        0,          # LFO frequency
+        0           # LFO depth
+    )
+    try:
+        device.write(report)
+    except Exception as e:
+        print(e)
+
+
+def rumble(device, left_speed=20000, right_speed=20000):
+    report = struct.pack(
+        "<BBHHbHb",
+        0x80,          # Report ID
+        0,             # Rumble type
+        4,             # Overall intensity
+        left_speed,    # Left motor speed
+        0,             # Left gain (dB)
+        right_speed,   # Right motor speed
+        10              # Right gain (dB)
+    )
+    try:
+        device.write(report)
+    except Exception as e:
+        print(e)
+
+def lowBat(device):
+    tone(device, 739)
+    time.sleep(0.1)
+    tone(device, 1108)
+    time.sleep(0.1)
+    tone(device, 739)
+
+def charged(device):
+    tone(device, 400)
+    time.sleep(0.05)
+    tone(device, 600)
+    time.sleep(0.05)
+    tone(device, 800, duration=100)
+
 class _Puck():
 
-    def __init__(self, lock: threading.Lock, puckNum, repoll = None):
+    def __init__(self, lock: threading.Lock, serial, puckNum, repoll = None):
+        self.serial : str = serial
         self.puckNum : int = puckNum
         self.slots: list = [None] * 4
         self.lock = lock
@@ -77,23 +134,40 @@ class _Puck():
         self.repoll : threading.Event = repoll
 
     @staticmethod
-    def _status_changed(previous: Optional[DeviceStatus], current: Optional[DeviceStatus]) -> bool:
+    def _status_changed(previous: Optional[List[int]], current: Optional[List[int]], slot) -> bool:
         if previous is None or current is None:
             return previous is not current
-        return (
-            previous.online != current.online
-            or previous.charging != current.charging
-            or previous.source != current.source
-            or previous.kind != current.kind
-            or previous.via != current.via
-        )
+        if NOTIFICATIONS:
+            dev = hid.device()
+            try:
+                dev.open_path(slot['path'])
+                if CHARGED_PING and previous[2] < 100 and current[2] >= 100:
+                    charged(dev)
+                dev.close()
+                pass
+            except Exception as e:
+                print(e)
+
+        return (previous[1] != current[1])
 
     def get_reports(self):
         out = []
         with self.lock:
-            for report in self._reports.values():
-                if report:
-                    out.append(report)
+            for report in self._reports.keys():
+                if self._reports[report]:
+                    state = self._reports[report][1]
+                    percent = self._reports[report][2]
+                    chargeState = False
+                    if state == STATE_CHARGING:
+                        chargeState = True
+                    devStat = DeviceStatus( 
+                            key=f"{self.serial}|{report}& Steam Controller ",
+                            name=f"Steam Controller ",
+                            level=percent, charging=chargeState,
+                            online=True, source="Valve", 
+                            kind="gamepad", via="dongle"
+                        )
+                    out.append(devStat)
             return [out, self._diag]
 
     def _poll_callback(self):
@@ -107,16 +181,14 @@ class _Puck():
             for slotNum, slot in enumerate(self.slots):
                 if slot is None:
                     continue
-                # The first connected controller has been the last in the list of hidResponses for me
-                # so I'm making the assumption each slot is reported in reverse order: 4,3,2,1
-                readout = self._read_slot(slot)
-                slotStats = readout[0]
+                readout = self._read_slot(slot, slotNum)
+                report = readout[0]
                 diag = readout[1]
                 with self.lock:
                     previous = self._reports.get(slotNum + 1)
-                    if self._status_changed(previous, slotStats):
+                    if self._status_changed(previous, report, slot):
                         changed = True
-                    self._reports[slotNum + 1] = slotStats
+                    self._reports[slotNum + 1] = report
                 loopDiag.append(diag)
             self._diag = loopDiag
             if changed and self.repoll is not None:
@@ -125,33 +197,35 @@ class _Puck():
             if self._stop.is_set():
                 break
 
-    def _read_slot(self, slot) -> tuple[DeviceStatus, str]:
+    def _read_slot(self, slot, slotNum) -> tuple[List, str]:
+        """Returns report : List, diag : str. 
+
+        report = [reportID, chargeState, batteryPercent]"""
         # Test each controller slot with proper REPORT_ID and REPORT_SIZE
         # connected controllers send reports in a steam
         device = hid.device()
         slotStats = [None, ""]
-
+        diag = (f"[Valve Software] pid = {PID} {slot['product_string']} {self.puckNum + 1} {slot['serial_number']}"
+            f" interface= {slot['interface_number']} {slot['usage_page']}:{slot['usage']}" 
+            f" Slot {slotNum + 1}")
         try:
             device.open_path(slot["path"])
         except (OSError, IOError) as e:
             with self.lock:
                 self._diag.append(f"  open: {e}")
             return slotStats
-        defaultDiag = (f"[Valve Software] pid = {PID} {slot['product_string']} {slot['serial_number']}"
-            f" interface= {slot['interface_number']} {slot['usage_page']}:{slot['usage']}" 
-            f" INACTIVE")
         device.set_nonblocking(False)
         for _ in range(ATTEMPTS):
             try: 
                 report = device.read(64, timeout_ms = READ_TIMEOUT)
                 if report:
                     # Sending reports
-                    slotStats = self._read_stream(device, slot, defaultDiag)
+                    slotStats = self._read_stream(device, diag)
                     break
                 else:
                     # Not sending reports
-                    slotStats = [None, defaultDiag]
-            except Exception as e:
+                    slotStats = [None, diag + ": INACTIVE"]
+            except Exception:
                 pass
             finally:
                 try:
@@ -160,29 +234,18 @@ class _Puck():
                     pass
         return slotStats
 
-    def _read_stream(self, device, puckSlot, defaultDiag) -> tuple[Optional[DeviceStatus], str]:
+    def _read_stream(self, device, diag) -> tuple[Optional[List], str]:
+        """Returns report :List, diag :str. 
+
+        report = [reportID, chargeState, batteryPercent]"""
         # Doesn't seem to be a way to request a report by ID so the best I can figure is to listen to
         # the stream of reports and wait for REPORT_ID
         endTime = time.monotonic() + POLLTIME
         while time.monotonic() < endTime:
             report = device.read(64, READ_TIMEOUT)
             if report and report[0] == REPORT_ID and len(report) >= REPORT_SIZE:
-                state = report[1]
-                percent = report[2]
-                chargeState = False
-                if state == STATE_CHARGING:
-                    chargeState = True
-                diag = (f"[Valve Software] pid = {PID} {puckSlot['product_string']} {puckSlot['serial_number']}"
-                        f" interface= {puckSlot['interface_number']} {puckSlot['usage_page']}:{puckSlot['usage']}"
-                        f" ACTIVE {hexdump(report, 4)}")
-                return DeviceStatus( 
-                            key=f"Steam Controller ",
-                            name=f"Steam Controller ",
-                            level=percent, charging=chargeState,
-                            online=True, source="Valve", 
-                            kind="gamepad", via="dongle"
-                        ), diag
-        return None, defaultDiag
+                return report[:3], diag + f": ACTIVE {hexdump(report, 3)}"
+        return None, diag
     
     def kill(self):
         self._stop.set()
@@ -218,12 +281,12 @@ class _Handler():
         for item in hidResponse:
             # Interface_number -1 seems to be for bluetooth which works wihtout this script
             if (item["usage_page"] == USAGE_PAGE and item["usage"] == USAGE and item["interface_number"] != -1):
-                serialNum:str = item["serial_number"]
+                serialNum = item["serial_number"]
                 if serialNum not in seen:
                     seen.append(serialNum)
                 if serialNum not in self.pucks.keys():
                     #create new pucks
-                    self.pucks[serialNum] = _Puck(self.lock, numPucks, self.repoll)
+                    self.pucks[serialNum] = _Puck(self.lock, serialNum, numPucks, self.repoll)
                     newPucks[serialNum] = []
                     numPucks += 1
                 if serialNum in newPucks.keys():
@@ -241,9 +304,7 @@ class _Handler():
                 toDelete = []
                 for serial in diff:
                     toDelete.append(self.pucks.pop(serial))
-                deletedPucks = []
                 for puck in toDelete:
-                    deletedPucks.append(puck.puckNum)
                     puck.kill()
                     del puck         
                 
@@ -283,6 +344,26 @@ class ValveSteamControllerProvider(Provider):
         if self._on_poll_callback:
             self._on_poll_callback.set()
 
+    def notify(self, st:str):
+        """Device key starts with <puckNumber> | <slotNumber>"""
+        p, s = st.split("|")
+        puck = self._handler.pucks[p]
+        slot = puck.slots[int(s)-1]
+        if slot:
+            dev = hid.device()
+            try:
+                with self.lock:
+                    dev.open_path(slot["path"])
+                    lowBat(dev)
+            except (OSError, IOError) as e:
+                with self.lock:
+                    self._diag.append(f"  open: {e}")
+            finally:
+                try:
+                    dev.close()
+                except Exception:
+                    pass
+
     def poll(self) -> List[DeviceStatus]:
         out: List[DeviceStatus] = []
         self._diag = []
@@ -304,7 +385,6 @@ class ValveSteamControllerProvider(Provider):
         copied = []
         for i, report in enumerate(out, 1):
             clone = report.__class__(**report.__dict__)
-            clone.key += f"{i}"
             clone.name += f"{i}"
             copied.append(clone)
         return copied
