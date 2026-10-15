@@ -18,6 +18,7 @@ diagnostics.txt
 .DS_Store
 Thumbs.db
 desktop.ini
+.vscode
 
 # Generated exe icon (tools/make_icon.py)
 halo.ico

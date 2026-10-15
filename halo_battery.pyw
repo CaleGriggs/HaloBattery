@@ -206,7 +206,7 @@ PROVIDER_LABELS = {
     "razer": "Razer mice and headsets",
     "steelseries": "SteelSeries",
     "steelseries_elite": "SteelSeries Arctis Nova Elite",
-    "valve software" : "Steam Controller",
+    "valve software": "Steam Controller",
     "wlmouse": "WLmouse",
     "xinput": "Xbox-compatible controllers",
 }
@@ -859,10 +859,12 @@ def low_battery_sound(level: Optional[int], charging: bool, online: bool, low: i
     return "critical" if level <= CRITICAL_LEVEL else "low"
 
 
-def play_low_sound(kind: str) -> None:
+def play_low_sound(kind: str, st= None, notif= None) -> None:
     """Play the sound in the background (SND_ASYNC), so the poll thread does not wait."""
     if winsound is None:
         return
+    if notif:
+        notif.notify(st.key.split("& ")[0])
     name, alias = LOW_SOUNDS[kind]
     path = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Media", name)
     try:
@@ -1811,7 +1813,9 @@ class App:
                                  self.low_sound_at.get(st.key), now)
         if kind:
             self.low_sound_at[st.key] = now
-            play_low_sound(kind)
+            if st.source=="Valve":
+                notif = self.providers[27]
+            play_low_sound(kind, st, notif)
 
     def check_full(self, ic: DeviceIcon, st: DeviceStatus):
         """A notification when a charging device reaches 100 %, once per charge.
