@@ -137,18 +137,19 @@ class _Puck():
     def _status_changed(previous: Optional[List[int]], current: Optional[List[int]], slot) -> bool:
         if previous is None or current is None:
             return previous is not current
+        out = False
         if NOTIFICATIONS:
-            dev = hid.device()
-            try:
-                dev.open_path(slot['path'])
-                if CHARGED_PING and previous[2] < 100 and current[2] >= 100:
+            if CHARGED_PING and previous[2] < 100 and current[2] >= 100:
+                out = True
+                dev = hid.device()
+                try:
+                    dev.open_path(slot['path'])
                     charged(dev)
-                dev.close()
-                pass
-            except Exception as e:
-                print(e)
-
-        return (previous[1] != current[1])
+                    dev.close()
+                    pass
+                except Exception as e:
+                    print(e)
+        return out
 
     def get_reports(self):
         out = []
